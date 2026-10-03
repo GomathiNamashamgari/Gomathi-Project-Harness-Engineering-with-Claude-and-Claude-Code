@@ -64,18 +64,26 @@ def run(
     turn = 0
     total_input = 0
     total_output = 0
+    terminal_called = False
 
     while True:
         turn += 1
         budget.check()
         t0 = time.monotonic()
-        response = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=system,
-            tools=tools,
-            messages=working_messages,
-        )
+        create_kwargs = {
+            "model": model,
+            "max_tokens": max_tokens,
+            "system": system,
+            "tools": tools,
+            "messages": working_messages,
+        }
+        # Before a terminal action, require the model to select another tool
+        # rather than prematurely ending the claim with end_turn. Once the
+        # terminal tool has been called, normal assistant completion is allowed.
+        if not terminal_called:
+            create_kwargs["tool_choice"] = {"type": "any"}
+
+        response = client.messages.create(**create_kwargs)
         latency_ms = (time.monotonic() - t0) * 1000.0
 
         input_tokens = int(response.usage.input_tokens)
@@ -117,6 +125,8 @@ def run(
                 if getattr(block, "type", None) != "tool_use":
                     continue
                 result_content = tool_executor(block.name, dict(block.input))
+                if block.name in {"route_to_adjuster", "escalate_to_human"}:
+                    terminal_called = True
                 tool_results.append(
                     {
                         "type": "tool_result",
